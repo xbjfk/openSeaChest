@@ -10,6 +10,7 @@ jobs:
   build:
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
+    if: ${{ ! startsWith(github.ref, 'refs/tags/') || matrix.config.publish_release }}
     strategy:
       matrix:
         config:
@@ -18,7 +19,11 @@ jobs:
             os: windows-latest,
             cc: "cl.exe",
             cxx: "cl.exe",
-            arch: "x64"
+            arch: "x64",
+            publish_release: true,
+            release_name: "win64",
+            release_extension: ".zip",
+            archive_command: "7z a -tzip -mmt"
           }
         - {
             name: "Windows MSVC x86",
@@ -26,6 +31,10 @@ jobs:
             cc: "cl.exe",
             cxx: "cl.exe",
             arch: "x64_x86"
+            publish_release: true
+            release_name: "win32",
+            release_extension: ".zip",
+            archive_command: "7z a -tzip -mmt"
           }
         - {
             name: "Windows GCC",
@@ -50,6 +59,10 @@ jobs:
             os: ubuntu-latest,
             cc: "clang",
             cxx: "clang++"
+            publish_release: true
+            release_name: "linux",
+            release_extension: ".tar.xz",
+            archive_command: "tar cvfJ"
           }
 
     steps:
@@ -86,6 +99,11 @@ jobs:
         Invoke-WebRequest -OutFile "LLVM.exe" ((Invoke-WebRequest "https://api.github.com/repos/llvm/llvm-project/releases/$($env:LLVM_RELID)").Content | ConvertFrom-Json | Select-Object -ExpandProperty assets | Where -Property name -Like "*win64.exe" | Select-Object -First 1).browser_download_url
         7z x LLVM.exe -y -o"C:/Program Files/LLVM"
 
+    - name: Setting release name
+      run: |
+        echo "DESTDIR=${{ format('openSeaChest-{0}-{1}', github.event.release.tag_name, matrix.config.release_name) }}" >> $GITHUB_ENV
+      shell: bash
+
     - uses: actions/setup-python@v1
 
     - name: Configuring and compiling with meson
@@ -94,7 +112,18 @@ jobs:
         CXX: ${{ matrix.config.cxx }}
       uses: BSFishy/meson-build@v1.0.3
       with:
-        action: build
+        action: install
         options: --verbose
+        setup-options: -Dprefix=/ -Dmandir=/man -Dbindir=/ --buildtype=release
         meson-version: 0.60.1
 
+    - name: Packing release
+      if: startsWith(github.ref, 'refs/tags/')
+      run: ${{ matrix.config.archive_command }} ${{ env.DESTDIR + matrix.config.release_extension }} $DESTDIR
+      shell: bash
+  
+    - name: Publish release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.DESTDIR + matrix.config.release_extension }}
